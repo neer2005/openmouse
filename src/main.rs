@@ -10,7 +10,6 @@ use std::io::Cursor;
 use std::net::UdpSocket;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
-use std::time::Duration;
 
 use clap::Parser;
 use image::{ImageFormat, Luma};
@@ -27,9 +26,6 @@ struct Args {
     /// Interface to bind
     #[arg(long, default_value = "0.0.0.0")]
     host: String,
-    /// Don't auto-open the browser (default: browser opens with the pairing page)
-    #[arg(long)]
-    no_browser: bool,
     /// Don't print the QR code in the terminal
     #[arg(long)]
     no_qr: bool,
@@ -122,16 +118,6 @@ async fn main() {
     }
     println!("  Scan the QR with your phone (same WiFi). Ctrl+C to stop.\n");
 
-    // Open the pairing page by default so the QR shows big on screen
-    // (great for TVs); --no-browser disables it.
-    if !args.no_browser {
-        let url = format!("http://127.0.0.1:{}/", args.port);
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(1200));
-            open_pairing_page(&url);
-        });
-    }
-
     let state = Arc::new(AppState {
         token,
         pair_url,
@@ -147,24 +133,4 @@ async fn main() {
 
 fn pair_url_for(ip: &str, port: u16, token: &str) -> String {
     format!("http://{ip}:{port}/remote?token={token}")
-}
-
-/// Open the pairing page in the default browser.
-/// On Windows the exe runs elevated (see build.rs), so we launch via
-/// explorer.exe: an elevated process opening a URL directly would spawn
-/// an elevated browser (or get blocked); going through Explorer keeps the
-/// browser at normal integrity.
-fn open_pairing_page(url: &str) {
-    #[cfg(windows)]
-    {
-        if let Err(e) = std::process::Command::new("explorer.exe").arg(url).spawn() {
-            eprintln!("[openmouse] couldn't open browser: {e}");
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        if let Err(e) = open::that(url) {
-            eprintln!("[openmouse] couldn't open browser: {e}");
-        }
-    }
 }
