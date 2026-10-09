@@ -1,0 +1,80 @@
+:root {
+  --bg: #14161c;
+  --panel: #1e222b;
+  --accent: #5b8cff;
+  --text: #e8eaf0;
+  --muted: #9aa0b0;
+  --btn: #2a2f3a;
+  --btn-active: #3a4152;
+  --danger: #e05c5c;
+  --ok: #57c785;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: var(--bg); color: var(--text);
+  font-family: system-ui, -apple-system, sans-serif;
+  overscroll-behavior: none;
+  user-select: none; -webkit-user-select: none;
+}
+#app { display: flex; flex-direction: column; height: 100dvh; }
+
+/* top bar */
+#topbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; background: var(--panel);
+}
+#topbar h1 { font-size: 16px; margin: 0 auto 0 0; font-weight: 600; }
+#status { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); }
+#status.on { background: var(--ok); }
+.icon-btn {
+  background: var(--btn); color: var(--text); border: none;
+  border-radius: 10px; padding: 9px 12px; font-size: 15px;
+}
+.icon-btn:active, .icon-btn.active { background: var(--accent); }
+
+/* trackpad */
+#pad {
+  flex: 1; margin: 12px; border-radius: 16px;
+  background: var(--panel);
+  border: 1px dashed #3a4152;
+  display: flex; align-items: center; justify-content: center;
+  touch-action: none; position: relative; overflow: hidden;
+}
+#pad .hint { color: var(--muted); font-size: 14px; text-align: center; padding: 0 24px; pointer-events: none; }
+#pad.dragging { border-color: var(--accent); border-style: solid; }
+
+/* click buttons */
+#clickbar { display: flex; gap: 10px; padding: 0 12px 6px; }
+.click-btn {
+  flex: 1; background: var(--btn); color: var(--text); border: none;
+  border-radius: 12px; padding: 16px 0; font-size: 16px;
+}
+.click-btn:active { background: var(--btn-active); }
+
+/* panels */
+.panel {
+  display: none; background: var(--panel); margin: 0 12px 12px;
+  border-radius: 14px; padding: 12px;
+}
+.panel.open { display: block; }
+.key-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.key-row:last-child { margin-bottom: 0; }
+.key {
+  flex: 1; background: var(--btn); color: var(--text); border: none;
+  border-radius: 10px; padding: 13px 0; font-size: 15px; min-width: 0;
+}
+.key:active { background: var(--accent); }
+.key.wide { flex: 2; }
+.key.danger { background: #5a2b2b; }
+.key.danger:active { background: var(--danger); }
+
+/* sensitivity */
+#sens-row { display: flex; align-items: center; gap: 10px; padding: 2px 12px 12px; color: var(--muted); font-size: 13px; }
+#sens { flex: 1; accent-color: var(--accent); }
+
+/* hidden input that summons the OS keyboard */
+#kb-proxy {
+  position: fixed; bottom: 0; left: 0; width: 10px; height: 10px;
+  opacity: 0.01; border: none; font-size: 16px; /* 16px avoids iOS zoom */
+}

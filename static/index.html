@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>OpenMouse Remote</title>
+<link rel="stylesheet" href="static/style.css?token=" id="css">
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <div id="status"></div>
+    <h1>OpenMouse</h1>
+    <button class="icon-btn" id="btn-kb" title="Keyboard">&#9000;</button>
+    <button class="icon-btn" id="btn-media" title="Media">&#9835;</button>
+    <button class="icon-btn" id="btn-power" title="Power">&#9209;</button>
+  </div>
+
+  <div id="pad"><div class="hint">Touchpad<br><br>1 finger: move &middot; tap: click<br>hold: drag &middot; 2-finger tap: right-click<br>2-finger slide: scroll</div></div>
+
+  <div id="kb-panel" class="panel">
+    <div class="key-row">
+      <button class="key" data-key="esc">Esc</button>
+      <button class="key" data-key="tab">Tab</button>
+      <button class="key" data-key="up">&uarr;</button>
+      <button class="key" data-key="down">&darr;</button>
+    </div>
+    <div class="key-row">
+      <button class="key" data-key="left">&larr;</button>
+      <button class="key" data-key="right">&rarr;</button>
+      <button class="key" data-key="backspace">&#9003;</button>
+      <button class="key wide" data-key="enter">Enter</button>
+    </div>
+    <div class="key-row">
+      <button class="key" data-key="f5">F5</button>
+      <button class="key" data-hotkey="alt,F4">Alt+F4</button>
+      <button class="key" data-hotkey="ctrl,c">Ctrl+C</button>
+      <button class="key" data-hotkey="ctrl,v">Ctrl+V</button>
+    </div>
+  </div>
+
+  <div id="media-panel" class="panel">
+    <div class="key-row">
+      <button class="key wide" data-media="prev">&#9198;</button>
+      <button class="key wide" data-media="playpause">&#9199;</button>
+      <button class="key wide" data-media="next">&#9197;</button>
+    </div>
+    <div class="key-row">
+      <button class="key wide" data-media="voldn">&#128265;</button>
+      <button class="key wide" data-media="mute">&#128263;</button>
+      <button class="key wide" data-media="volup">&#128266;</button>
+    </div>
+  </div>
+
+  <div id="power-panel" class="panel">
+    <div class="key-row">
+      <button class="key wide" data-power="sleep">&#128564; Sleep</button>
+      <button class="key wide" data-power="logoff">Log off</button>
+    </div>
+    <div class="key-row">
+      <button class="key wide" data-power="restart">&#128260; Restart</button>
+      <button class="key wide danger" data-power="shutdown">&#9211; Shut down</button>
+    </div>
+  </div>
+
+  <div id="clickbar">
+    <button class="click-btn" id="btn-left">Left click</button>
+    <button class="click-btn" id="btn-right">Right click</button>
+  </div>
+
+  <div id="sens-row">
+    <span>Speed</span>
+    <input type="range" id="sens" min="0.5" max="4" step="0.25" value="2">
+  </div>
+</div>
+
+<!-- hidden input: focusing it summons the OS keyboard; typed text is relayed -->
+<input id="kb-proxy" type="text" autocomplete="off" autocorrect="off"
+       autocapitalize="none" spellcheck="false" enterkeyhint="go">
+<script>
+// static assets require the auth token: attach it to their URLs
+(function () {
+  var token = new URLSearchParams(location.search).get('token') || '';
+  document.getElementById('css').href = 'static/style.css?token=' + encodeURIComponent(token);
+  var s = document.createElement('script');
+  s.src = 'static/app.js?token=' + encodeURIComponent(token);
+  document.body.appendChild(s);
+})();
+</script>
+</body>
+</html>
