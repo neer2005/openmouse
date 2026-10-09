@@ -1,0 +1,49 @@
+name: Windows release build
+
+# Builds a standalone openmouse.exe and attaches it to the GitHub release.
+# Trigger it by pushing a tag (git push origin v0.1.0) or manually from the
+# Actions tab with a tag name. The exe needs nothing installed.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create tag (manual runs only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git tag "${{ inputs.tag }}"
+          git push origin "refs/tags/${{ inputs.tag }}"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build openmouse.exe
+        run: cargo build --release
+
+      - name: Publish to GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        shell: pwsh
+        run: |
+          $tag = $env:TAG
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title "OpenMouse $tag" --notes "Windows standalone build. Download openmouse.exe, run it, and scan the QR code with your phone (same WiFi). Nothing to install."
+          }
+          gh release upload $tag target/release/openmouse.exe --clobber
