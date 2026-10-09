@@ -27,12 +27,12 @@ struct Args {
     /// Interface to bind
     #[arg(long, default_value = "0.0.0.0")]
     host: String,
-    /// Open the pairing page in the default browser
-    #[arg(long)]
-    open_browser: bool,
-    /// Don't auto-open the browser
+    /// Don't auto-open the browser (default: browser opens with the pairing page)
     #[arg(long)]
     no_browser: bool,
+    /// Don't print the QR code in the terminal
+    #[arg(long)]
+    no_qr: bool,
     /// Verbose logging
     #[arg(short, long)]
     verbose: bool,
@@ -67,24 +67,38 @@ fn qr_png_bytes(url: &str) -> Vec<u8> {
     buf
 }
 
+/// Print the QR code compactly: two QR modules per terminal row using
+/// half-block characters, with a 1-module quiet zone. Much smaller than
+/// the classic two-chars-per-module rendering — fits small terminals/TVs.
 fn print_qr_ascii(url: &str) {
     let code = QrCode::new(url).expect("QR encode");
-    let w = code.width();
+    let w = code.width() as i32;
     println!();
-    for y in 0..w {
-        for x in 0..w {
+    for y in (-1..=w).step_by(2) {
+        for x in -1..=w {
+            let top = is_dark(&code, x, y);
+            let bottom = is_dark(&code, x, y + 1);
             print!(
                 "{}",
-                if code[(x, y)] == Color::Dark {
-                    "██"
-                } else {
-                    "  "
+                match (top, bottom) {
+                    (true, true) => "█",
+                    (true, false) => "▀",
+                    (false, true) => "▄",
+                    (false, false) => " ",
                 }
             );
         }
         println!();
     }
     println!();
+}
+
+fn is_dark(code: &QrCode, x: i32, y: i32) -> bool {
+    let w = code.width() as i32;
+    if x < 0 || y < 0 || x >= w || y >= w {
+        return false; // quiet zone
+    }
+    code[(x as usize, y as usize)] == Color::Dark
 }
 
 #[tokio::main]
@@ -103,10 +117,14 @@ async fn main() {
     println!("\n  OpenMouse server running");
     println!("  Backend : {}", input::backend_name());
     println!("  Phone   : {pair_url}\n");
-    print_qr_ascii(&pair_url);
+    if !args.no_qr {
+        print_qr_ascii(&pair_url);
+    }
     println!("  Scan the QR with your phone (same WiFi). Ctrl+C to stop.\n");
 
-    if args.open_browser && !args.no_browser {
+    // Open the pairing page by default so the QR shows big on screen
+    // (great for TVs); --no-browser disables it.
+    if !args.no_browser {
         let url = format!("http://127.0.0.1:{}/", args.port);
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(1200));
