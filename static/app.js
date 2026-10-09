@@ -186,6 +186,48 @@
     if (document.hidden) endDrag();
   });
 
+  /* ---------- scroll rail (Remote Mouse style) ---------- */
+  (function () {
+    var track = document.getElementById('rail-track');
+    var railAcc = 0, railLastY = 0, railActive = false;
+
+    function railScroll(dyPx) {
+      railAcc += dyPx;
+      var ticks = Math.trunc(railAcc / SCROLL_PX_PER_TICK);
+      if (ticks !== 0) {
+        // natural scrolling, matches the trackpad: drag down = scroll up
+        send({ t: 'scroll', dx: 0, dy: ticks });
+        railAcc -= ticks * SCROLL_PX_PER_TICK;
+      }
+    }
+
+    track.addEventListener('touchstart', function (e) {
+      e.preventDefault();
+      railActive = true; railAcc = 0;
+      railLastY = e.touches[0].clientY;
+    }, { passive: false });
+
+    track.addEventListener('touchmove', function (e) {
+      e.preventDefault();
+      if (!railActive) return;
+      var y = e.touches[0].clientY;
+      railScroll(y - railLastY);
+      railLastY = y;
+    }, { passive: false });
+
+    function railEnd() { railActive = false; railAcc = 0; }
+    track.addEventListener('touchend', railEnd);
+    track.addEventListener('touchcancel', railEnd);
+
+    // Chevron taps: quick 3-tick jumps
+    document.getElementById('rail-up').addEventListener('touchstart', function (e) {
+      e.preventDefault(); send({ t: 'scroll', dx: 0, dy: 3 });
+    }, { passive: false });
+    document.getElementById('rail-down').addEventListener('touchstart', function (e) {
+      e.preventDefault(); send({ t: 'scroll', dx: 0, dy: -3 });
+    }, { passive: false });
+  })();
+
   /* ---------- click buttons ---------- */
   document.getElementById('btn-left').addEventListener('click', function () {
     send({ t: 'click', button: 'left' });
