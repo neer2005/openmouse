@@ -1,5 +1,0 @@
-aiohttp>=3.9
-pynput>=1.7
-qrcode>=7.4
-Pillow>=10.0
-zeroconf>=0.131
