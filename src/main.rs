@@ -128,9 +128,7 @@ async fn main() {
         let url = format!("http://127.0.0.1:{}/", args.port);
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(1200));
-            if let Err(e) = open::that(&url) {
-                eprintln!("[openmouse] couldn't open browser: {e}");
-            }
+            open_pairing_page(&url);
         });
     }
 
@@ -149,4 +147,24 @@ async fn main() {
 
 fn pair_url_for(ip: &str, port: u16, token: &str) -> String {
     format!("http://{ip}:{port}/remote?token={token}")
+}
+
+/// Open the pairing page in the default browser.
+/// On Windows the exe runs elevated (see build.rs), so we launch via
+/// explorer.exe: an elevated process opening a URL directly would spawn
+/// an elevated browser (or get blocked); going through Explorer keeps the
+/// browser at normal integrity.
+fn open_pairing_page(url: &str) {
+    #[cfg(windows)]
+    {
+        if let Err(e) = std::process::Command::new("explorer.exe").arg(url).spawn() {
+            eprintln!("[openmouse] couldn't open browser: {e}");
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if let Err(e) = open::that(url) {
+            eprintln!("[openmouse] couldn't open browser: {e}");
+        }
+    }
 }

@@ -28,6 +28,9 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
 ] }
 
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
 [profile.release]
 # Small, fast-starting single binary
 opt-level = "z"
