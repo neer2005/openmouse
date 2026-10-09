@@ -119,7 +119,7 @@
         scrollAcc += dySum / n;
         var ticks = Math.trunc(scrollAcc / SCROLL_PX_PER_TICK);
         if (ticks !== 0) {
-          send({ t: 'scroll', dx: 0, dy: -ticks }); // fingers down = scroll down
+          send({ t: 'scroll', dx: 0, dy: ticks }); // natural: fingers down = scroll up
           scrollAcc -= ticks * SCROLL_PX_PER_TICK;
         }
       }
