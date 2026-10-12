@@ -406,6 +406,15 @@ mod imp {
             Ok(m) => m,
             Err(_) => return,
         };
+        // Version header (disabled): OpenMouse 0.2.0
+        let version_text = wide(&format!("OpenMouse {}", env!("CARGO_PKG_VERSION")));
+        let _ = AppendMenuW(
+            hmenu,
+            MF_STRING | MF_GRAYED | MF_DISABLED,
+            0,
+            PCWSTR(version_text.as_ptr()),
+        );
+        let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
         let autostart_text = wide("Start with Windows");
         let checked = autostart_enabled();
         let flags = MF_STRING | if checked { MF_CHECKED } else { MF_UNCHECKED };
@@ -551,7 +560,7 @@ mod imp {
             let _ = tx.send(hwnd.0 as isize);
 
             let hicon = create_icon();
-            let tip = wide("OpenMouse");
+            let tip = wide(&format!("OpenMouse {}", env!("CARGO_PKG_VERSION")));
             let mut nid: NOTIFYICONDATAW = zeroed();
             nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
             nid.hWnd = hwnd;
