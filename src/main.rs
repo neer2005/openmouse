@@ -31,8 +31,13 @@ struct Args {
     /// Don't print the QR code in the terminal
     #[arg(long)]
     no_qr: bool,
-    /// Hide the console window and run from the system tray (Windows only)
+    /// Show the console window with the QR code and logs (hidden by default;
+    /// the tray icon is the UI now)
     #[arg(long)]
+    console: bool,
+    /// Deprecated: tray mode is now the default. Kept (hidden) so existing
+    /// autostart entries that pass --tray keep working.
+    #[arg(long, hide = true)]
     tray: bool,
     /// Verbose logging
     #[arg(short, long)]
@@ -106,6 +111,13 @@ fn is_dark(code: &QrCode, x: i32, y: i32) -> bool {
 async fn main() {
     let args = Args::parse();
 
+    // The console is hidden by default — the tray icon is the UI now, and
+    // pairing happens via its "Show QR code" menu item. --console keeps the
+    // window visible. Hide first, before any output, to avoid a flash.
+    if !args.console {
+        tray::hide_console();
+    }
+
     if args.verbose {
         eprintln!("[openmouse] verbose logging on");
     }
@@ -124,13 +136,9 @@ async fn main() {
     println!("  Scan the QR with your phone (same WiFi). Ctrl+C to stop.\n");
 
     // System tray icon (Windows only; no-op elsewhere). Its thread is shut
-    // down cleanly below so no ghost icon is left behind. In --tray mode the
-    // console is hidden; pairing then happens via the tray's "Copy pairing
-    // URL" menu item.
-    if args.tray {
-        tray::hide_console();
-    }
-    let (tray, mut exit_rx) = tray::spawn(pair_url.clone());
+    // down cleanly below so no ghost icon is left behind. With no console,
+    // the QR popup is shown on launch as the pairing UI.
+    let (tray, mut exit_rx) = tray::spawn(pair_url.clone(), !args.console);
 
     let state = Arc::new(AppState {
         token,
