@@ -376,6 +376,31 @@ mod imp {
         }
     }
 
+    /// Open the QR popup, or raise it if one is already open.
+    unsafe fn show_or_raise_qr_popup() {
+        let pair_url = TRAY_STATE.with(|s| {
+            s.borrow()
+                .as_ref()
+                .map(|st| st.pair_url.clone())
+                .unwrap_or_default()
+        });
+        let existing = TRAY_STATE.with(|s| s.borrow().as_ref().and_then(|st| st.qr_hwnd));
+        match existing {
+            Some(qr_hwnd) => {
+                let _ = SetForegroundWindow(qr_hwnd);
+            }
+            None => {
+                if let Some(qr_hwnd) = create_qr_window(&pair_url) {
+                    TRAY_STATE.with(|s| {
+                        if let Some(st) = s.borrow_mut().as_mut() {
+                            st.qr_hwnd = Some(qr_hwnd);
+                        }
+                    });
+                }
+            }
+        }
+    }
+
     unsafe fn show_context_menu(hwnd: HWND) {
         let hmenu = match CreatePopupMenu() {
             Ok(m) => m,
@@ -421,24 +446,7 @@ mod imp {
         // With TPM_RETURNCMD the return value carries the chosen item id.
         match cmd.0 as usize {
             IDM_AUTOSTART => set_autostart(!checked),
-            IDM_SHOW_QR => {
-                let existing =
-                    TRAY_STATE.with(|s| s.borrow().as_ref().and_then(|st| st.qr_hwnd));
-                match existing {
-                    Some(qr_hwnd) => {
-                        let _ = SetForegroundWindow(qr_hwnd);
-                    }
-                    None => {
-                        if let Some(qr_hwnd) = create_qr_window(&pair_url) {
-                            TRAY_STATE.with(|s| {
-                                if let Some(st) = s.borrow_mut().as_mut() {
-                                    st.qr_hwnd = Some(qr_hwnd);
-                                }
-                            });
-                        }
-                    }
-                }
-            }
+            IDM_SHOW_QR => show_or_raise_qr_popup(),
             IDM_COPY_URL => copy_text_to_clipboard(&pair_url),
             IDM_EXIT => TRAY_STATE.with(|s| {
                 if let Some(st) = s.borrow_mut().as_mut() {
@@ -490,7 +498,12 @@ mod imp {
         }
     }
 
-    fn run(tx: mpsc::Sender<isize>, pair_url: String, exit_tx: oneshot::Sender<()>) {
+    fn run(
+        tx: mpsc::Sender<isize>,
+        pair_url: String,
+        exit_tx: oneshot::Sender<()>,
+        auto_show_qr: bool,
+    ) {
         TRAY_STATE.with(|s| {
             *s.borrow_mut() = Some(TrayState {
                 pair_url,
@@ -553,21 +566,11 @@ mod imp {
                 let _ = Shell_NotifyIconW(NIM_ADD, &nid);
             }
 
-            // Announce the tray icon with a balloon tip. The console is
-            // hidden by default now, so this is the startup cue — it points
-            // at the QR popup for pairing.
-            let info_title = wide("OpenMouse is running");
-            let info_text =
-                wide("Right-click the tray icon, then Show QR code to pair your phone.");
-            for (i, c) in info_title.iter().take(63).enumerate() {
-                nid.szInfoTitle[i] = *c;
+            // No console by default, so the QR popup is the pairing UI —
+            // show it on launch (unless the caller asked for the console).
+            if auto_show_qr {
+                show_or_raise_qr_popup();
             }
-            for (i, c) in info_text.iter().take(255).enumerate() {
-                nid.szInfo[i] = *c;
-            }
-            nid.dwInfoFlags = NIIF_INFO;
-            nid.uFlags = NIF_INFO;
-            let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
 
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -638,10 +641,13 @@ mod imp {
         }
     }
 
-    pub(crate) fn spawn(pair_url: String) -> (super::TrayHandle, oneshot::Receiver<()>) {
+    pub(crate) fn spawn(
+        pair_url: String,
+        auto_show_qr: bool,
+    ) -> (super::TrayHandle, oneshot::Receiver<()>) {
         let (hwnd_tx, hwnd_rx) = mpsc::channel::<isize>();
         let (exit_tx, exit_rx) = oneshot::channel::<()>();
-        let thread = thread::spawn(move || run(hwnd_tx, pair_url, exit_tx));
+        let thread = thread::spawn(move || run(hwnd_tx, pair_url, exit_tx, auto_show_qr));
         // If the tray thread died before creating its window, recv fails and
         // we degrade gracefully: the server still runs, just without an icon.
         let hwnd_raw = hwnd_rx.recv().unwrap_or(0);
@@ -703,8 +709,11 @@ impl TrayNotifier {
 }
 
 #[cfg(windows)]
-pub fn spawn(pair_url: String) -> (TrayHandle, tokio::sync::oneshot::Receiver<()>) {
-    imp::spawn(pair_url)
+pub fn spawn(
+    pair_url: String,
+    auto_show_qr: bool,
+) -> (TrayHandle, tokio::sync::oneshot::Receiver<()>) {
+    imp::spawn(pair_url, auto_show_qr)
 }
 
 #[cfg(windows)]
@@ -713,7 +722,10 @@ pub fn hide_console() {
 }
 
 #[cfg(not(windows))]
-pub fn spawn(_pair_url: String) -> (TrayHandle, tokio::sync::oneshot::Receiver<()>) {
+pub fn spawn(
+    _pair_url: String,
+    _auto_show_qr: bool,
+) -> (TrayHandle, tokio::sync::oneshot::Receiver<()>) {
     let (_tx, rx) = tokio::sync::oneshot::channel();
     (TrayHandle {}, rx)
 }

@@ -136,8 +136,9 @@ async fn main() {
     println!("  Scan the QR with your phone (same WiFi). Ctrl+C to stop.\n");
 
     // System tray icon (Windows only; no-op elsewhere). Its thread is shut
-    // down cleanly below so no ghost icon is left behind.
-    let (tray, mut exit_rx) = tray::spawn(pair_url.clone());
+    // down cleanly below so no ghost icon is left behind. With no console,
+    // the QR popup is shown on launch as the pairing UI.
+    let (tray, mut exit_rx) = tray::spawn(pair_url.clone(), !args.console);
 
     let state = Arc::new(AppState {
         token,
