@@ -9,8 +9,9 @@ mod tray;
 
 use std::io::Cursor;
 use std::net::UdpSocket;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Parser;
 use image::{ImageFormat, Luma};
@@ -136,6 +137,22 @@ async fn main() {
         pair_url,
         qr_png,
         clients: AtomicUsize::new(0),
+    });
+
+    // When a phone pairs, dismiss the QR popup — its job is done. Cheap poll
+    // of the client counter; the tray thread does the actual window teardown.
+    let notifier = tray.notifier();
+    let watch_state = state.clone();
+    tokio::spawn(async move {
+        let mut last = 0usize;
+        loop {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let n = watch_state.clients.load(Ordering::Relaxed);
+            if n > last {
+                last = n;
+                notifier.close_qr_popup();
+            }
+        }
     });
 
     tokio::select! {
