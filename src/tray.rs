@@ -182,8 +182,9 @@ mod imp {
                 match std::env::current_exe() {
                     Ok(exe) => {
                         // Quote the path so directories with spaces survive.
-                        // --tray keeps boot launches silent (no console popup).
-                        let cmd = format!("\"{}\" --tray", exe.display());
+                        // No flags needed: tray mode (hidden console) is the
+                        // default now, and --tray is still accepted anyway.
+                        let cmd = format!("\"{}\"", exe.display());
                         let data = wide(&cmd);
                         let bytes: &[u8] = std::slice::from_raw_parts(
                             data.as_ptr() as *const u8,
@@ -551,6 +552,22 @@ mod imp {
             if !hicon.0.is_null() {
                 let _ = Shell_NotifyIconW(NIM_ADD, &nid);
             }
+
+            // Announce the tray icon with a balloon tip. The console is
+            // hidden by default now, so this is the startup cue — it points
+            // at the QR popup for pairing.
+            let info_title = wide("OpenMouse is running");
+            let info_text =
+                wide("Right-click the tray icon, then Show QR code to pair your phone.");
+            for (i, c) in info_title.iter().take(63).enumerate() {
+                nid.szInfoTitle[i] = *c;
+            }
+            for (i, c) in info_text.iter().take(255).enumerate() {
+                nid.szInfo[i] = *c;
+            }
+            nid.dwInfoFlags = NIIF_INFO;
+            nid.uFlags = NIF_INFO;
+            let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
 
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).as_bool() {
