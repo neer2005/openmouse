@@ -1,14 +1,18 @@
 //! Windows system tray icon with a right-click context menu.
 //!
 //! The icon runs its own Win32 message loop on a dedicated thread, fully
-//! independent of the tokio runtime. Right-clicking the icon pops up a menu
-//! that currently holds one item: a "Start with Windows" checkbox backed by
-//! the HKCU `Software\Microsoft\Windows\CurrentVersion\Run` registry key.
+//! independent of the tokio runtime. Right-clicking the icon pops up a menu:
+//!
+//! - "Start with Windows" checkbox, backed by the HKCU
+//!   `Software\Microsoft\Windows\CurrentVersion\Run` registry key
+//! - "Copy pairing URL", for when the console (and its QR code) is hidden
+//! - "Exit", which asks the main thread to shut everything down
 //!
 //! On non-Windows platforms this module compiles to a no-op stub.
 
 #[cfg(windows)]
 mod imp {
+    use std::cell::RefCell;
     use std::ffi::OsStr;
     use std::mem::{size_of, zeroed};
     use std::os::windows::ffi::OsStrExt;
@@ -16,10 +20,17 @@ mod imp {
     use std::sync::mpsc;
     use std::thread::{self, JoinHandle};
 
+    use tokio::sync::oneshot;
+
     use windows::core::{BOOL, PCWSTR};
-    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+    use windows::Win32::Foundation::{
+        GlobalFree, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM,
+    };
     use windows::Win32::Graphics::Gdi::*;
+    use windows::Win32::System::Console::GetConsoleWindow;
+    use windows::Win32::System::DataExchange::*;
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::System::Memory::*;
     use windows::Win32::System::Registry::*;
     use windows::Win32::UI::Shell::*;
     use windows::Win32::UI::WindowsAndMessaging::*;
@@ -27,9 +38,24 @@ mod imp {
     /// Custom window message the tray icon uses to report mouse events.
     const WM_TRAYICON: u32 = WM_APP + 1;
     const IDM_AUTOSTART: usize = 1001;
+    const IDM_COPY_URL: usize = 1002;
+    const IDM_EXIT: usize = 1003;
+    /// CF_UNICODETEXT clipboard format id.
+    const CF_UNICODETEXT: u32 = 13;
     const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
     const VALUE_NAME: &str = "OpenMouse";
     const ICON_PX: i32 = 64;
+
+    /// State owned by the tray thread; the pairing URL is fixed for the run
+    /// while the exit sender is consumed the first time Exit is clicked.
+    struct TrayState {
+        pair_url: String,
+        exit_tx: Option<oneshot::Sender<()>>,
+    }
+
+    thread_local! {
+        static TRAY_STATE: RefCell<Option<TrayState>> = const { RefCell::new(None) };
+    }
 
     fn wide(s: &str) -> Vec<u16> {
         OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
@@ -150,7 +176,8 @@ mod imp {
                 match std::env::current_exe() {
                     Ok(exe) => {
                         // Quote the path so directories with spaces survive.
-                        let cmd = format!("\"{}\"", exe.display());
+                        // --tray keeps boot launches silent (no console popup).
+                        let cmd = format!("\"{}\" --tray", exe.display());
                         let data = wide(&cmd);
                         let bytes: &[u8] = std::slice::from_raw_parts(
                             data.as_ptr() as *const u8,
@@ -172,15 +199,53 @@ mod imp {
         }
     }
 
+    /// Copy text to the Windows clipboard (CF_UNICODETEXT).
+    unsafe fn copy_text_to_clipboard(text: &str) {
+        let wide: Vec<u16> = OsStr::new(text).encode_wide().chain(std::iter::once(0)).collect();
+        if OpenClipboard(Some(HWND(null_mut()))).is_err() {
+            return;
+        }
+        let _ = EmptyClipboard();
+        let bytes = wide.len() * 2;
+        if let Ok(hmem) = GlobalAlloc(GMEM_MOVEABLE, bytes) {
+            let ptr = GlobalLock(hmem);
+            if !ptr.is_null() {
+                std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr as *mut u16, wide.len());
+                let _ = GlobalUnlock(hmem);
+                // On success the system owns the memory; on failure free it.
+                if SetClipboardData(CF_UNICODETEXT, Some(HANDLE(hmem.0))).is_err() {
+                    let _ = GlobalFree(Some(hmem));
+                }
+            } else {
+                let _ = GlobalFree(Some(hmem));
+            }
+        }
+        let _ = CloseClipboard();
+    }
+
     unsafe fn show_context_menu(hwnd: HWND) {
         let hmenu = match CreatePopupMenu() {
             Ok(m) => m,
             Err(_) => return,
         };
-        let text = wide("Start with Windows");
+        let autostart_text = wide("Start with Windows");
         let checked = autostart_enabled();
         let flags = MF_STRING | if checked { MF_CHECKED } else { MF_UNCHECKED };
-        let _ = AppendMenuW(hmenu, flags, IDM_AUTOSTART, PCWSTR(text.as_ptr()));
+        let _ = AppendMenuW(hmenu, flags, IDM_AUTOSTART, PCWSTR(autostart_text.as_ptr()));
+        let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+        let copy_text = wide("Copy pairing URL");
+        let _ = AppendMenuW(hmenu, MF_STRING, IDM_COPY_URL, PCWSTR(copy_text.as_ptr()));
+        let exit_text = wide("Exit");
+        let _ = AppendMenuW(hmenu, MF_STRING, IDM_EXIT, PCWSTR(exit_text.as_ptr()));
+
+        // Snapshot what the click handlers need; the borrow must not be held
+        // across TrackPopupMenu's modal loop.
+        let pair_url = TRAY_STATE.with(|s| {
+            s.borrow()
+                .as_ref()
+                .map(|st| st.pair_url.clone())
+                .unwrap_or_default()
+        });
 
         let mut pt = POINT::default();
         let _ = GetCursorPos(&mut pt);
@@ -199,8 +264,17 @@ mod imp {
         let _ = DestroyMenu(hmenu);
 
         // With TPM_RETURNCMD the return value carries the chosen item id.
-        if cmd.0 as usize == IDM_AUTOSTART {
-            set_autostart(!checked);
+        match cmd.0 as usize {
+            IDM_AUTOSTART => set_autostart(!checked),
+            IDM_COPY_URL => copy_text_to_clipboard(&pair_url),
+            IDM_EXIT => TRAY_STATE.with(|s| {
+                if let Some(st) = s.borrow_mut().as_mut() {
+                    if let Some(tx) = st.exit_tx.take() {
+                        let _ = tx.send(());
+                    }
+                }
+            }),
+            _ => {}
         }
     }
 
@@ -229,7 +303,13 @@ mod imp {
         }
     }
 
-    fn run(tx: mpsc::Sender<isize>) {
+    fn run(tx: mpsc::Sender<isize>, pair_url: String, exit_tx: oneshot::Sender<()>) {
+        TRAY_STATE.with(|s| {
+            *s.borrow_mut() = Some(TrayState {
+                pair_url,
+                exit_tx: Some(exit_tx),
+            });
+        });
         unsafe {
             let instance: HINSTANCE = GetModuleHandleW(PCWSTR::null())
                 .map(|h| h.into())
@@ -315,22 +395,35 @@ mod imp {
         }
     }
 
-    pub(crate) fn spawn() -> super::TrayHandle {
-        let (tx, rx) = mpsc::channel::<isize>();
-        let thread = thread::spawn(move || run(tx));
+    /// Hide this process's console window (used for `--tray` launches).
+    pub(crate) fn hide_console() {
+        unsafe {
+            let hwnd = GetConsoleWindow();
+            if !hwnd.0.is_null() {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+    }
+
+    pub(crate) fn spawn(pair_url: String) -> (super::TrayHandle, oneshot::Receiver<()>) {
+        let (hwnd_tx, hwnd_rx) = mpsc::channel::<isize>();
+        let (exit_tx, exit_rx) = oneshot::channel::<()>();
+        let thread = thread::spawn(move || run(hwnd_tx, pair_url, exit_tx));
         // If the tray thread died before creating its window, recv fails and
         // we degrade gracefully: the server still runs, just without an icon.
-        let hwnd_raw = rx.recv().unwrap_or(0);
+        let hwnd_raw = hwnd_rx.recv().unwrap_or(0);
         if hwnd_raw == 0 {
             eprintln!("[openmouse] tray icon unavailable; continuing without it");
         }
-        super::TrayHandle {
-            #[cfg(windows)]
-            inner: Some(Inner {
-                hwnd: HWND(hwnd_raw as *mut std::ffi::c_void),
-                thread: Some(thread),
-            }),
-        }
+        (
+            super::TrayHandle {
+                inner: Some(Inner {
+                    hwnd: HWND(hwnd_raw as *mut std::ffi::c_void),
+                    thread: Some(thread),
+                }),
+            },
+            exit_rx,
+        )
     }
 }
 
@@ -349,11 +442,20 @@ impl TrayHandle {
 }
 
 #[cfg(windows)]
-pub fn spawn() -> TrayHandle {
-    imp::spawn()
+pub fn spawn(pair_url: String) -> (TrayHandle, tokio::sync::oneshot::Receiver<()>) {
+    imp::spawn(pair_url)
+}
+
+#[cfg(windows)]
+pub fn hide_console() {
+    imp::hide_console()
 }
 
 #[cfg(not(windows))]
-pub fn spawn() -> TrayHandle {
-    TrayHandle {}
+pub fn spawn(_pair_url: String) -> (TrayHandle, tokio::sync::oneshot::Receiver<()>) {
+    let (_tx, rx) = tokio::sync::oneshot::channel();
+    (TrayHandle {}, rx)
 }
+
+#[cfg(not(windows))]
+pub fn hide_console() {}

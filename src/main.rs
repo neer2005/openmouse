@@ -30,6 +30,9 @@ struct Args {
     /// Don't print the QR code in the terminal
     #[arg(long)]
     no_qr: bool,
+    /// Hide the console window and run from the system tray (Windows only)
+    #[arg(long)]
+    tray: bool,
     /// Verbose logging
     #[arg(short, long)]
     verbose: bool,
@@ -120,8 +123,13 @@ async fn main() {
     println!("  Scan the QR with your phone (same WiFi). Ctrl+C to stop.\n");
 
     // System tray icon (Windows only; no-op elsewhere). Its thread is shut
-    // down cleanly below so no ghost icon is left behind.
-    let tray = tray::spawn();
+    // down cleanly below so no ghost icon is left behind. In --tray mode the
+    // console is hidden; pairing then happens via the tray's "Copy pairing
+    // URL" menu item.
+    if args.tray {
+        tray::hide_console();
+    }
+    let (tray, mut exit_rx) = tray::spawn(pair_url.clone());
 
     let state = Arc::new(AppState {
         token,
@@ -140,6 +148,10 @@ async fn main() {
         }
         _ = tokio::signal::ctrl_c() => {
             println!("\n  Shutting down.");
+            tray.shutdown();
+        }
+        _ = &mut exit_rx => {
+            println!("\n  Shutting down (tray exit).");
             tray.shutdown();
         }
     }
