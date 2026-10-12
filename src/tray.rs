@@ -24,7 +24,7 @@ mod imp {
 
     use windows::core::{BOOL, PCWSTR};
     use windows::Win32::Foundation::{
-        GlobalFree, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM,
+        GlobalFree, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
     };
     use windows::Win32::Graphics::Gdi::*;
     use windows::Win32::System::Console::GetConsoleWindow;
@@ -40,8 +40,11 @@ mod imp {
     const IDM_AUTOSTART: usize = 1001;
     const IDM_COPY_URL: usize = 1002;
     const IDM_EXIT: usize = 1003;
+    const IDM_SHOW_QR: usize = 1004;
     /// CF_UNICODETEXT clipboard format id.
     const CF_UNICODETEXT: u32 = 13;
+    /// Target size for the QR popup bitmap (square, pixels).
+    const QR_PX: u32 = 384;
     const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
     const VALUE_NAME: &str = "OpenMouse";
     const ICON_PX: i32 = 64;
@@ -51,6 +54,7 @@ mod imp {
     struct TrayState {
         pair_url: String,
         exit_tx: Option<oneshot::Sender<()>>,
+        qr_hwnd: Option<HWND>,
     }
 
     thread_local! {
@@ -223,6 +227,152 @@ mod imp {
         let _ = CloseClipboard();
     }
 
+    /// Render the pairing URL as a QR code into a 32bpp DIB bitmap.
+    /// Returns the bitmap and its side length in pixels (always square).
+    unsafe fn qr_bitmap(pair_url: &str) -> Option<(HBITMAP, i32)> {
+        use image::Luma;
+        use qrcode::QrCode;
+        let code = QrCode::new(pair_url.as_bytes()).ok()?;
+        let img = code
+            .render::<Luma<u8>>()
+            .max_dimensions(QR_PX, QR_PX)
+            .quiet_zone(true)
+            .build();
+        let side = img.width() as i32;
+        let raw = img.into_raw();
+        let mut bi: BITMAPINFO = zeroed();
+        bi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+        bi.bmiHeader.biWidth = side;
+        bi.bmiHeader.biHeight = -side; // top-down DIB
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB.0;
+        let mut bits: *mut std::ffi::c_void = null_mut();
+        let hbm = CreateDIBSection(None, &bi, DIB_RGB_COLORS, &mut bits, None, 0).ok()?;
+        let dst = std::slice::from_raw_parts_mut(bits as *mut u32, raw.len());
+        for (d, g) in dst.iter_mut().zip(raw.iter()) {
+            *d = if *g > 128 { 0xFF_FF_FF_FF } else { 0xFF_00_00_00 };
+        }
+        Some((hbm, side))
+    }
+
+    struct QrWindowData {
+        hbm: HBITMAP,
+        side: i32,
+    }
+
+    /// Create (or raise) the centered, topmost QR popup window.
+    /// Runs on the tray thread, which owns the message loop.
+    unsafe fn create_qr_window(pair_url: &str) -> Option<HWND> {
+        let (hbm, side) = match qr_bitmap(pair_url) {
+            Some(b) => b,
+            None => {
+                eprintln!("[openmouse] tray: QR render failed");
+                return None;
+            }
+        };
+        let instance: HINSTANCE = GetModuleHandleW(PCWSTR::null())
+            .map(|h| h.into())
+            .unwrap_or(HINSTANCE(null_mut()));
+        let class_name = wide("OpenMouseQrWindow");
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(qr_wnd_proc),
+            hInstance: instance,
+            lpszClassName: PCWSTR(class_name.as_ptr()),
+            ..zeroed()
+        };
+        // Tolerate the class already existing from an earlier popup.
+        let _ = RegisterClassW(&wc);
+
+        let pad = 24i32;
+        let style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+        let client = side + pad * 2;
+        let mut rc = RECT {
+            left: 0,
+            top: 0,
+            right: client,
+            bottom: client,
+        };
+        let _ = AdjustWindowRect(&mut rc, style, false.into());
+        let win_w = rc.right - rc.left;
+        let win_h = rc.bottom - rc.top;
+        let x = (GetSystemMetrics(SM_CXSCREEN) - win_w) / 2;
+        let y = (GetSystemMetrics(SM_CYSCREEN) - win_h) / 2;
+
+        let title = wide("OpenMouse \u{2014} scan to pair");
+        let hwnd = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            PCWSTR(class_name.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            style | WS_VISIBLE,
+            x,
+            y,
+            win_w,
+            win_h,
+            None,
+            None,
+            Some(instance),
+            None,
+        )
+        .ok()?;
+        let data = Box::new(QrWindowData { hbm, side });
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(data) as isize);
+        let _ = SetForegroundWindow(hwnd);
+        Some(hwnd)
+    }
+
+    unsafe extern "system" fn qr_wnd_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        match msg {
+            WM_PAINT => {
+                let data = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut QrWindowData;
+                let mut ps = PAINTSTRUCT::default();
+                let hdc = BeginPaint(hwnd, &mut ps);
+                if !hdc.0.is_null() {
+                    let mut rc = RECT::default();
+                    let _ = GetClientRect(hwnd, &mut rc);
+                    let white = GetStockObject(WHITE_BRUSH);
+                    if !white.0.is_null() {
+                        let _ = FillRect(hdc, &rc, HBRUSH(white.0));
+                    }
+                    if !data.is_null() {
+                        let d = &*data;
+                        let memdc = CreateCompatibleDC(Some(hdc));
+                        if !memdc.0.is_null() {
+                            let old = SelectObject(memdc, d.hbm.into());
+                            let x = (rc.right - rc.left - d.side) / 2;
+                            let y = (rc.bottom - rc.top - d.side) / 2;
+                            let _ =
+                                BitBlt(hdc, x, y, d.side, d.side, Some(memdc), 0, 0, SRCCOPY);
+                            SelectObject(memdc, old);
+                            let _ = DeleteDC(memdc);
+                        }
+                    }
+                }
+                let _ = EndPaint(hwnd, &ps);
+                LRESULT(0)
+            }
+            WM_NCDESTROY => {
+                let data = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut QrWindowData;
+                if !data.is_null() {
+                    let d = Box::from_raw(data);
+                    let _ = DeleteObject(d.hbm.into());
+                }
+                TRAY_STATE.with(|s| {
+                    if let Some(st) = s.borrow_mut().as_mut() {
+                        st.qr_hwnd = None;
+                    }
+                });
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
+
     unsafe fn show_context_menu(hwnd: HWND) {
         let hmenu = match CreatePopupMenu() {
             Ok(m) => m,
@@ -233,6 +383,8 @@ mod imp {
         let flags = MF_STRING | if checked { MF_CHECKED } else { MF_UNCHECKED };
         let _ = AppendMenuW(hmenu, flags, IDM_AUTOSTART, PCWSTR(autostart_text.as_ptr()));
         let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+        let qr_text = wide("Show QR code");
+        let _ = AppendMenuW(hmenu, MF_STRING, IDM_SHOW_QR, PCWSTR(qr_text.as_ptr()));
         let copy_text = wide("Copy pairing URL");
         let _ = AppendMenuW(hmenu, MF_STRING, IDM_COPY_URL, PCWSTR(copy_text.as_ptr()));
         let exit_text = wide("Exit");
@@ -266,6 +418,24 @@ mod imp {
         // With TPM_RETURNCMD the return value carries the chosen item id.
         match cmd.0 as usize {
             IDM_AUTOSTART => set_autostart(!checked),
+            IDM_SHOW_QR => {
+                let existing =
+                    TRAY_STATE.with(|s| s.borrow().as_ref().and_then(|st| st.qr_hwnd));
+                match existing {
+                    Some(qr_hwnd) => {
+                        let _ = SetForegroundWindow(qr_hwnd);
+                    }
+                    None => {
+                        if let Some(qr_hwnd) = create_qr_window(&pair_url) {
+                            TRAY_STATE.with(|s| {
+                                if let Some(st) = s.borrow_mut().as_mut() {
+                                    st.qr_hwnd = Some(qr_hwnd);
+                                }
+                            });
+                        }
+                    }
+                }
+            }
             IDM_COPY_URL => copy_text_to_clipboard(&pair_url),
             IDM_EXIT => TRAY_STATE.with(|s| {
                 if let Some(st) = s.borrow_mut().as_mut() {
@@ -296,6 +466,12 @@ mod imp {
                 LRESULT(0)
             }
             WM_DESTROY => {
+                // Close any open QR popup before quitting the message loop.
+                let qr_hwnd =
+                    TRAY_STATE.with(|s| s.borrow().as_ref().and_then(|st| st.qr_hwnd));
+                if let Some(qr_hwnd) = qr_hwnd {
+                    let _ = DestroyWindow(qr_hwnd);
+                }
                 PostQuitMessage(0);
                 LRESULT(0)
             }
@@ -308,6 +484,7 @@ mod imp {
             *s.borrow_mut() = Some(TrayState {
                 pair_url,
                 exit_tx: Some(exit_tx),
+                qr_hwnd: None,
             });
         });
         unsafe {
