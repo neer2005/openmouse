@@ -257,6 +257,14 @@
   btnMedia.addEventListener('click', function () { togglePanel(mediaPanel, btnMedia); });
   btnPower.addEventListener('click', function () { togglePanel(powerPanel, btnPower); });
 
+  /* ---------- collapsible click buttons + speed slider (hidden by default) ---------- */
+  var clickControls = document.getElementById('click-controls');
+  var btnClicks = document.getElementById('btn-clicks');
+  btnClicks.addEventListener('click', function () {
+    var collapsed = clickControls.classList.toggle('collapsed');
+    btnClicks.classList.toggle('active', !collapsed);
+  });
+
   /* ---------- keyboard relay via hidden input ---------- */
   var kbProxy = document.getElementById('kb-proxy');
   btnKb.addEventListener('click', function () {
