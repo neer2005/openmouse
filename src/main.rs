@@ -5,6 +5,7 @@
 
 mod input;
 mod server;
+mod tray;
 
 use std::io::Cursor;
 use std::net::UdpSocket;
@@ -118,6 +119,10 @@ async fn main() {
     }
     println!("  Scan the QR with your phone (same WiFi). Ctrl+C to stop.\n");
 
+    // System tray icon (Windows only; no-op elsewhere). Its thread is shut
+    // down cleanly below so no ghost icon is left behind.
+    let tray = tray::spawn();
+
     let state = Arc::new(AppState {
         token,
         pair_url,
@@ -125,9 +130,18 @@ async fn main() {
         clients: AtomicUsize::new(0),
     });
 
-    if let Err(e) = server::run(&args.host, args.port, state).await {
-        eprintln!("[openmouse] server error: {e}");
-        std::process::exit(1);
+    tokio::select! {
+        r = server::run(&args.host, args.port, state) => {
+            tray.shutdown();
+            if let Err(e) = r {
+                eprintln!("[openmouse] server error: {e}");
+                std::process::exit(1);
+            }
+        }
+        _ = tokio::signal::ctrl_c() => {
+            println!("\n  Shutting down.");
+            tray.shutdown();
+        }
     }
 }
 
