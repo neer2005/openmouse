@@ -1,6 +1,6 @@
 [package]
 name = "openmouse"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Open-source wireless mouse, keyboard and trackpad - control your PC from your phone over local WiFi"
 license = "MIT"
