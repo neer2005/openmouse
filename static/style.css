@@ -68,6 +68,17 @@ html, body {
 }
 .click-btn:active { background: var(--btn-active); }
 
+/* collapsible click controls (click buttons + speed), hidden by default */
+#click-controls.collapsed { display: none; }
+
+/* bottom toolbar */
+#toolbar {
+  display: flex; gap: 10px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  background: var(--panel);
+}
+#toolbar .icon-btn { flex: 1; padding: 12px 0; font-size: 18px; }
+
 /* panels */
 .panel {
   display: none; background: var(--panel); margin: 0 12px 12px;
