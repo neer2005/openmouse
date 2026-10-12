@@ -37,6 +37,8 @@ mod imp {
 
     /// Custom window message the tray icon uses to report mouse events.
     const WM_TRAYICON: u32 = WM_APP + 1;
+    /// Ask the tray thread to close the QR popup (posted from other threads).
+    pub(crate) const WM_CLOSE_QR_POPUP: u32 = WM_APP + 2;
     const IDM_AUTOSTART: usize = 1001;
     const IDM_COPY_URL: usize = 1002;
     const IDM_EXIT: usize = 1003;
@@ -461,6 +463,14 @@ mod imp {
                 }
                 LRESULT(0)
             }
+            WM_CLOSE_QR_POPUP => {
+                let qr_hwnd =
+                    TRAY_STATE.with(|s| s.borrow().as_ref().and_then(|st| st.qr_hwnd));
+                if let Some(qr_hwnd) = qr_hwnd {
+                    let _ = DestroyWindow(qr_hwnd);
+                }
+                LRESULT(0)
+            }
             WM_CLOSE => {
                 let _ = DestroyWindow(hwnd);
                 LRESULT(0)
@@ -570,7 +580,36 @@ mod imp {
                 let _ = t.join();
             }
         }
+
+        pub fn notifier(&self) -> Notifier {
+            Notifier { hwnd: self.hwnd }
+        }
     }
+
+    /// Lightweight, cloneable handle for nudging the tray thread from other
+    /// threads (e.g. the async runtime). All it does is post window messages.
+    #[derive(Clone, Copy)]
+    pub struct Notifier {
+        hwnd: HWND,
+    }
+
+    impl Notifier {
+        pub fn close_qr_popup(&self) {
+            unsafe {
+                let _ = PostMessageW(Some(self.hwnd), WM_CLOSE_QR_POPUP, WPARAM(0), LPARAM(0));
+            }
+        }
+
+        pub fn null() -> Self {
+            Notifier {
+                hwnd: HWND(null_mut()),
+            }
+        }
+    }
+
+    // Sound: the only thing a Notifier does with its HWND is PostMessageW,
+    // which is thread-safe by Win32 design.
+    unsafe impl Send for Notifier {}
 
     /// Hide this process's console window (used for `--tray` launches).
     pub(crate) fn hide_console() {
@@ -616,6 +655,34 @@ impl TrayHandle {
             inner.shutdown();
         }
     }
+
+    /// A cheap, shareable handle for asking the tray thread to close the QR
+    /// popup (e.g. from the async runtime when a client pairs).
+    pub fn notifier(&self) -> TrayNotifier {
+        #[cfg(windows)]
+        {
+            match &self.inner {
+                Some(inner) => inner.notifier(),
+                None => TrayNotifier::null(),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            TrayNotifier
+        }
+    }
+}
+
+#[cfg(windows)]
+pub use imp::Notifier as TrayNotifier;
+
+#[cfg(not(windows))]
+#[derive(Clone, Copy)]
+pub struct TrayNotifier;
+
+#[cfg(not(windows))]
+impl TrayNotifier {
+    pub fn close_qr_popup(&self) {}
 }
 
 #[cfg(windows)]
