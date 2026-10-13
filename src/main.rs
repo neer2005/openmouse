@@ -6,6 +6,8 @@
 mod input;
 mod server;
 mod tray;
+#[cfg(windows)]
+mod update;
 
 use std::io::Cursor;
 use std::net::UdpSocket;
@@ -178,6 +180,15 @@ async fn main() {
         _ = &mut exit_rx => {
             println!("\n  Shutting down (tray exit).");
             tray.shutdown();
+        }
+    }
+
+    // A successful in-app update replaced the binary on disk: relaunch it so
+    // the new version takes over. Fresh pairing token, so the QR popup shows
+    // as usual for re-pairing the phone.
+    if tray::take_update_restart() {
+        if let Ok(exe) = std::env::current_exe() {
+            let _ = std::process::Command::new(exe).spawn();
         }
     }
 }
