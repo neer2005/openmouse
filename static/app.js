@@ -240,20 +240,25 @@
   var kbPanel = document.getElementById('kb-panel');
   var mediaPanel = document.getElementById('media-panel');
   var powerPanel = document.getElementById('power-panel');
-  var btnKb = document.getElementById('btn-kb');
+  var btnFn = document.getElementById('btn-fn');
   var btnMedia = document.getElementById('btn-media');
   var btnPower = document.getElementById('btn-power');
 
-  function togglePanel(panel, btn) {
-    var open = panel.classList.contains('open');
+  function closePanels() {
     kbPanel.classList.remove('open');
     mediaPanel.classList.remove('open');
     powerPanel.classList.remove('open');
-    btnKb.classList.remove('active');
+    btnFn.classList.remove('active');
     btnMedia.classList.remove('active');
     btnPower.classList.remove('active');
+  }
+  function togglePanel(panel, btn) {
+    var open = panel.classList.contains('open');
+    closePanels();
+    dismissKeyboard();
     if (!open) { panel.classList.add('open'); btn.classList.add('active'); }
   }
+  btnFn.addEventListener('click', function () { togglePanel(kbPanel, btnFn); });
   btnMedia.addEventListener('click', function () { togglePanel(mediaPanel, btnMedia); });
   btnPower.addEventListener('click', function () { togglePanel(powerPanel, btnPower); });
 
@@ -265,16 +270,23 @@
     btnClicks.classList.toggle('active', !collapsed);
   });
 
-  /* ---------- keyboard relay via hidden input ---------- */
+  /* ---------- iOS keyboard (typing), separate from shortcut buttons ---------- */
   var kbProxy = document.getElementById('kb-proxy');
+  var btnKb = document.getElementById('btn-kb');
+
+  function keyboardUp() { return document.activeElement === kbProxy; }
+  function dismissKeyboard() { if (keyboardUp()) kbProxy.blur(); }
+
+  kbProxy.addEventListener('focus', function () { btnKb.classList.add('active'); });
+  kbProxy.addEventListener('blur', function () { btnKb.classList.remove('active'); });
+
+  // ⌨️ toggles the iOS keyboard for typing
   btnKb.addEventListener('click', function () {
-    togglePanel(kbPanel, btnKb);
-    kbProxy.focus({ preventScroll: true });
-  });
-  // keep focus so the OS keyboard stays up while typing
-  kbProxy.addEventListener('blur', function () {
-    if (kbPanel.classList.contains('open')) {
-      setTimeout(function () { kbProxy.focus({ preventScroll: true }); }, 50);
+    if (keyboardUp()) {
+      dismissKeyboard();
+    } else {
+      closePanels();
+      kbProxy.focus({ preventScroll: true });
     }
   });
   kbProxy.addEventListener('input', function () {
