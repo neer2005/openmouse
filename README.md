@@ -9,7 +9,8 @@ no app store, no Python: just open a URL.
 
 Get the latest **`openmouse.exe`** from the
 [Releases page](https://github.com/neer2005/openmouse/releases). Just run it
-and scan the QR code with your phone (same WiFi).
+and scan the QR code with your phone (same WiFi). After that,
+updates install themselves via **Check for updates…** in the tray menu.
 
 > Windows SmartScreen may flag the unsigned exe on first run:
 > click "More info" → "Run anyway".
@@ -18,13 +19,19 @@ and scan the QR code with your phone (same WiFi).
 
 - **Trackpad** — 1-finger move, tap to click, press-and-hold to drag,
   2-finger tap for right-click, 2-finger slide to scroll, 3-finger tap for
-  middle-click
-- **Keyboard** — full text input via your phone's own keyboard, plus Esc,
-  arrows, Enter, Backspace, F5, and hotkeys (Alt+F4, Ctrl+C/V)
+  middle-click; scroll rail with ▲/▼ buttons and collapsible click
+  controls in the bottom toolbar
+- **Keyboard** — ⌨️ brings up your phone's own keyboard for typing; the Fn
+  button opens the shortcut panel: Esc, Tab, Ins, End, arrows, Enter,
+  Backspace, F5, and hotkeys (⊞ Win, Alt+Tab, ⊞+D, Alt+F4, Ctrl+C/V)
 - **Media controls** — play/pause, prev/next, volume, mute
 - **Power controls** (Windows) — sleep, restart, log off, shut down from the
   phone, each with a confirm dialog
-- **Pairing** — QR code in the terminal; per-run token auth
+- **System tray** — runs quietly in the tray (console hidden); autostart
+  option, Show QR / Copy pairing URL, and **Check for updates…** for
+  one-click self-updates
+- **Pairing** — QR popup on launch that closes itself once your phone
+  pairs; fresh auth token on every run, valid only on your local WiFi
 
 ## From source
 
