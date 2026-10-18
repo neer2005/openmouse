@@ -19,6 +19,11 @@ qrcode = "0.14"
 image = "0.25"
 rand = "0.8"
 clap = { version = "4", features = ["derive"] }
+# Self-update via GitHub Releases (tray menu "Check for updates…").
+# No progress-bar: the console is hidden, so download progress goes nowhere.
+# native-tls (Schannel) instead of rustls: no C toolchain needed to build,
+# and it uses the Windows certificate store.
+self_update = { version = "1", default-features = false, features = ["github", "reqwest", "native-tls"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

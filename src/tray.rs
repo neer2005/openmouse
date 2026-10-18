@@ -5,7 +5,9 @@
 //!
 //! - "Start with Windows" checkbox, backed by the HKCU
 //!   `Software\Microsoft\Windows\CurrentVersion\Run` registry key
+//! - "Show QR code", which pops up the pairing QR
 //! - "Copy pairing URL", for when the console (and its QR code) is hidden
+//! - "Check for updates…", which checks GitHub Releases and self-updates
 //! - "Exit", which asks the main thread to shut everything down
 //!
 //! On non-Windows platforms this module compiles to a no-op stub.
@@ -17,6 +19,7 @@ mod imp {
     use std::mem::{size_of, zeroed};
     use std::os::windows::ffi::OsStrExt;
     use std::ptr::null_mut;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
     use std::thread::{self, JoinHandle};
 
@@ -39,10 +42,14 @@ mod imp {
     const WM_TRAYICON: u32 = WM_APP + 1;
     /// Ask the tray thread to close the QR popup (posted from other threads).
     pub(crate) const WM_CLOSE_QR_POPUP: u32 = WM_APP + 2;
+    /// Ask the tray thread to exit for an update restart (posted from the
+    /// update worker thread after the new binary is on disk).
+    pub(crate) const WM_UPDATE_RESTART: u32 = WM_APP + 3;
     const IDM_AUTOSTART: usize = 1001;
     const IDM_COPY_URL: usize = 1002;
     const IDM_EXIT: usize = 1003;
     const IDM_SHOW_QR: usize = 1004;
+    const IDM_CHECK_UPDATES: usize = 1005;
     /// CF_UNICODETEXT clipboard format id.
     const CF_UNICODETEXT: u32 = 13;
     /// Target size for the QR popup bitmap (square, pixels).
@@ -62,6 +69,12 @@ mod imp {
     thread_local! {
         static TRAY_STATE: RefCell<Option<TrayState>> = const { RefCell::new(None) };
     }
+
+    /// Set when the app should relaunch after shutdown (an update replaced
+    /// the binary on disk). Read once by the main thread after clean exit.
+    pub(crate) static UPDATE_RESTART: AtomicBool = AtomicBool::new(false);
+    /// Guards the "Check for updates" worker; also grays the menu item.
+    static UPDATE_BUSY: AtomicBool = AtomicBool::new(false);
 
     fn wide(s: &str) -> Vec<u16> {
         OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
@@ -424,6 +437,19 @@ mod imp {
         let _ = AppendMenuW(hmenu, MF_STRING, IDM_SHOW_QR, PCWSTR(qr_text.as_ptr()));
         let copy_text = wide("Copy pairing URL");
         let _ = AppendMenuW(hmenu, MF_STRING, IDM_COPY_URL, PCWSTR(copy_text.as_ptr()));
+        let update_text = wide("Check for updates\u{2026}");
+        let update_flags = MF_STRING
+            | if UPDATE_BUSY.load(Ordering::SeqCst) {
+                MF_GRAYED
+            } else {
+                MF_UNCHECKED
+            };
+        let _ = AppendMenuW(
+            hmenu,
+            update_flags,
+            IDM_CHECK_UPDATES,
+            PCWSTR(update_text.as_ptr()),
+        );
         let exit_text = wide("Exit");
         let _ = AppendMenuW(hmenu, MF_STRING, IDM_EXIT, PCWSTR(exit_text.as_ptr()));
 
@@ -457,15 +483,106 @@ mod imp {
             IDM_AUTOSTART => set_autostart(!checked),
             IDM_SHOW_QR => show_or_raise_qr_popup(),
             IDM_COPY_URL => copy_text_to_clipboard(&pair_url),
-            IDM_EXIT => TRAY_STATE.with(|s| {
-                if let Some(st) = s.borrow_mut().as_mut() {
-                    if let Some(tx) = st.exit_tx.take() {
-                        let _ = tx.send(());
-                    }
-                }
-            }),
+            IDM_CHECK_UPDATES => check_for_updates(hwnd),
+            IDM_EXIT => signal_exit(),
             _ => {}
         }
+    }
+
+    /// Ask the main thread to shut down via the exit channel (shared by the
+    /// Exit menu item and the update-restart flow).
+    fn signal_exit() {
+        TRAY_STATE.with(|s| {
+            if let Some(st) = s.borrow_mut().as_mut() {
+                if let Some(tx) = st.exit_tx.take() {
+                    let _ = tx.send(());
+                }
+            }
+        });
+    }
+
+    unsafe fn message_box(hwnd: HWND, title: &str, text: &str, style: MESSAGEBOX_STYLE) -> bool {
+        let title_w = wide(title);
+        let text_w = wide(text);
+        MessageBoxW(
+            Some(hwnd),
+            PCWSTR(text_w.as_ptr()),
+            PCWSTR(title_w.as_ptr()),
+            style,
+        ) == IDYES
+    }
+
+    /// "Check for updates…" menu item: network I/O runs on a worker thread so
+    /// the tray message loop never blocks. Results and prompts are plain
+    /// message boxes; on a successful install the app exits and the main
+    /// thread relaunches the new binary.
+    fn check_for_updates(hwnd: HWND) {
+        if UPDATE_BUSY.swap(true, Ordering::SeqCst) {
+            return; // a check is already running
+        }
+        // HWND is not Send; round-trip through isize like the spawn handshake.
+        let hwnd_raw = hwnd.0 as isize;
+        thread::spawn(move || {
+            let hwnd = HWND(hwnd_raw as *mut std::ffi::c_void);
+            let title = "OpenMouse update";
+            match crate::update::check() {
+                Err(e) => unsafe {
+                    message_box(
+                        hwnd,
+                        title,
+                        &format!("Update check failed:\n{e}"),
+                        MB_OK | MB_ICONWARNING,
+                    );
+                },
+                Ok(None) => unsafe {
+                    message_box(
+                        hwnd,
+                        title,
+                        &format!("You're up to date (v{}).", env!("CARGO_PKG_VERSION")),
+                        MB_OK | MB_ICONINFORMATION,
+                    );
+                },
+                Ok(Some(ver)) => {
+                    let go = unsafe {
+                        message_box(
+                            hwnd,
+                            title,
+                            &format!("Version {ver} is available. Update now?"),
+                            MB_YESNO | MB_ICONQUESTION,
+                        )
+                    };
+                    if go {
+                        match crate::update::install(&ver) {
+                            Ok(()) => request_update_restart(hwnd),
+                            Err(e) => unsafe {
+                                message_box(
+                                    hwnd,
+                                    title,
+                                    &format!("Update failed:\n{e}"),
+                                    MB_OK | MB_ICONWARNING,
+                                );
+                            },
+                        }
+                    }
+                }
+            }
+            UPDATE_BUSY.store(false, Ordering::SeqCst);
+        });
+    }
+
+    /// The new binary is on disk: flag a relaunch and ask the tray thread to
+    /// exit so the main thread shuts down cleanly (server socket released,
+    /// tray icon removed) before the new version starts.
+    pub(crate) fn request_update_restart(hwnd: HWND) {
+        UPDATE_RESTART.store(true, Ordering::SeqCst);
+        unsafe {
+            let _ = PostMessageW(Some(hwnd), WM_UPDATE_RESTART, WPARAM(0), LPARAM(0));
+        }
+    }
+
+    /// Consume the pending update-restart flag (main thread, after shutdown).
+    pub(crate) fn take_update_restart() -> bool {
+        UPDATE_RESTART.swap(false, Ordering::SeqCst)
     }
 
     unsafe extern "system" fn wnd_proc(
@@ -487,6 +604,10 @@ mod imp {
                 if let Some(qr_hwnd) = qr_hwnd {
                     let _ = DestroyWindow(qr_hwnd);
                 }
+                LRESULT(0)
+            }
+            WM_UPDATE_RESTART => {
+                signal_exit();
                 LRESULT(0)
             }
             WM_CLOSE => {
@@ -728,6 +849,16 @@ pub fn spawn(
 #[cfg(windows)]
 pub fn hide_console() {
     imp::hide_console()
+}
+
+#[cfg(windows)]
+pub fn take_update_restart() -> bool {
+    imp::take_update_restart()
+}
+
+#[cfg(not(windows))]
+pub fn take_update_restart() -> bool {
+    false
 }
 
 #[cfg(not(windows))]
